@@ -1,3 +1,191 @@
+module or_8 (
+  input[7:0] A, B,
+  output[7:0] Result
+);
+  assign Result = A | B;
+endmodule
+
+module not_8 (
+  input[7:0] A,
+  output[7:0] Result
+);
+  assign Result = ~A;
+endmodule
+
+module and_8 (
+  input[7:0] A, B,
+  output[7:0] Result
+);
+  assign Result = A & B;
+endmodule
+
+module nand_8 (
+  input[7:0] A, B,
+  output[7:0] Result
+);
+  assign Result = ~(A & B);
+endmodule
+
+module lr_8 (
+  input[7:0] A,
+  output[7:0] Result
+);
+  assign Result = {A[6:0], A[7]};
+endmodule
+
+module rr_8 (
+  input[7:0] A,
+  output[7:0] Result
+);
+  assign Result = {A[0], A[7:1]};
+endmodule
+
+module adder_8 (
+  input[7:0] A, B,
+  input Cin,
+  output[7:0] Sum,
+  output Cout
+);
+  assign {Cout, Sum} = A + B + Cin;
+endmodule
+
+module ls_8 (
+  input[7:0] A,
+  output[7:0] Result
+);
+  assign Result = A <<< 1;
+endmodule
+
+module rs_8 (
+  input[7:0] A,
+  output[7:0] Result
+);
+  assign Result = A >>> 1;
+endmodule
+
+module xnor_8 (
+  input[7:0] A, B,
+  output[7:0] Result
+);
+  assign Result = ~(A ^ B);
+endmodule
+
+module mux_2to1_8 (
+  input[7:0] A, B,
+  input Sel,
+  output[7:0] Result
+);
+  assign Result = Sel ? B : A; // B -> 1, A -> 0
+endmodule
+
+module logic_8 (
+  input[7:0] A, B,
+  input[2:0] AluOp, // for logic operations, msb is always 1, so we can use 3 bits
+  output[7:0] Result
+);
+  wire[7:0] lr_result, rr_result, and_result, not_result, or_result, nand_result;
+  wire[7:0] mux1_result, mux2_result, mux3_result, mux4_result;
+
+  // logic operations
+  lr_8 lr_inst(.A(A), .Result(lr_result));
+  rr_8 rr_inst(.A(A), .Result(rr_result));
+  and_8 and_inst(.A(A), .B(B), .Result(and_result));
+  not_8 not_inst(.A(A), .Result(not_result));
+  or_8 or_inst(.A(A), .B(B), .Result(or_result));
+  nand_8 nand_inst(.A(A), .B(B), .Result(nand_result));
+
+  // first layer of muxes
+  mux_2to1_8 mux1_inst(.A(lr_result), .B(rr_result), .Sel(AluOp[0]), .Result(mux1_result));
+  mux_2to1_8 mux2_inst(.A(not_result), .B(and_result), .Sel(AluOp[0]), .Result(mux2_result));
+  mux_2to1_8 mux3_inst(.A(or_result), .B(nand_result), .Sel(AluOp[0]), .Result(mux3_result));
+
+  // second layer of muxes
+  mux_2to1_8 mux4_inst(.A(mux2_result), .B(mux3_result), .Sel(AluOp[1]), .Result(mux4_result));
+  
+  // final mux (result)
+  mux_2to1_8 mux5_inst(.A(mux4_result), .B(mux1_result), .Sel(AluOp[2]), .Result(Result));
+endmodule
+
+
+
+module arithmetic_8 (
+  input[7:0] A, B,
+  input[2:0] AluOp, // for logic operations, msb is always 0, so we can use 3 bits
+  output[7:0] Result,
+  output Cout
+);
+  wire[7:0] adder_result, soe_result, ls_result, rs_result;
+  wire[7:0] notA_result;
+  wire[7:0] mux1_result, mux2_result, mux3_result, mux4_result;
+
+  // arithmetic operations
+  not_8 notA_inst(.A(A), .Result(notA_result));
+  
+  // first layer of muxes
+  mux_2to1_8 mux1_inst(.A(A), .B(notA_result), .Sel(AluOp[0]), .Result(mux1_result)); // A or ~A (for subtraction)
+  mux_2to1_8 mux2_inst(.A(B), .B(8'b00000001), .Sel(AluOp[1]), .Result(mux2_result)); // B or 1 (for increment)
+
+  adder_8 adder_inst(.A(mux1_result), .B(mux2_result), .Cin(AluOp[0]), .Sum(adder_result), .Cout(Cout)); // add/sub/inc
+
+  xnor_8 soe_inst(.A(A), .B(B), .Result(soe_result)); // set on equal
+  ls_8 ls_inst(.A(A), .Result(ls_result)); // logical shift left
+  rs_8 rs_inst(.A(A), .Result(rs_result)); // logical shift right
+
+  // second layer of muxes
+  mux_2to1_8 mux3_inst(.A(ls_result), .B(rs_result), .Sel(AluOp[0]), .Result(mux3_result)); // ls or rs
+
+  // third layer of muxes
+  mux_2to1_8 mux4_inst(.A(soe_result), .B(mux3_result), .Sel(AluOp[1]), .Result(mux4_result)); // soe or (ls/rs)
+
+  // final mux (result)
+  mux_2to1_8 mux5_inst(.A(adder_result), .B(mux4_result), .Sel(AluOp[2]), .Result(Result)); // (soe/(ls/rs)) or add/sub/inc
+endmodule
+
+
+module ALU_8 (
+  output [7:0] Result,
+  output Zero,
+  output Negative,
+  output Overflow,
+  input [7:0] A, B,
+  input [3:0] AluOp
+);
+  wire[7:0] arithmetic_result, logic_result;
+  wire Cout;
+
+  arithmetic_8 arithmetic_unit(
+    .A(A),
+    .B(B),
+    .AluOp(AluOp[2:0]),
+    .Result(arithmetic_result),
+    .Cout(Cout)
+  );
+
+  logic_8 logic_unit(
+    .A(A),
+    .B(B),
+    .AluOp(AluOp[2:0]),
+    .Result(logic_result)
+  );
+
+  mux_2to1_8 result_mux(
+    .A(arithmetic_result),
+    .B(logic_result),
+    .Sel(AluOp[3]),
+    .Result(Result)
+  );
+
+  assign Zero = (Result == 8'b00000000) ? 1'b1 : 1'b0;
+  assign Negative = Result[7];
+  assign Overflow = (AluOp[3] == 1'b0) ? 
+                    ((AluOp[2:0] == 3'b000 || AluOp[2:0] == 3'b001) ? 
+                      ((A[7] == B[7]) && (Result[7] != A[7]) ? 1'b1 : 1'b0) 
+                      : 1'b0) 
+                    : 1'b0;
+
+endmodule
+
+
 module ALU_8_tb;
   reg[7:0] A, B;
   reg[3:0] AluOp;
